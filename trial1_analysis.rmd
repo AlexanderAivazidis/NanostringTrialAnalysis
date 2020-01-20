@@ -1,0 +1,147 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+### Check if Nanostring data is of good quality, contains signal from the expected cell types and how it compares to scRNAseq
+
+---
+  title: ""
+output:
+  html_document: default
+github_document: default
+---
+  
+```{r include = FALSE}
+### Load data and packages
+
+knitr::opts_chunk$set(fig.width=12, fig.height=8) 
+
+```
+
+
+```{r, include = FALSE, message = FALSE, warning = FALSE, cache = FALSE}
+library(Seurat)
+require(ComplexHeatmap)
+require(ggplot2)
+require(readxl)
+library("dplyr")
+require(ggpubr)
+```
+
+Using the Nanostring technology we have collected data from 3 samples at 2 times 19pcw and once 14pcw and at both the germinal zone (GZ) and cortical plate (CP). The cortical plate sample is S3. We will use the Polioudakis 2019 scRNAseq data from the fetal cortex (pcw 17/18) as a comparison. While it is not from exactly the same part of the cortex it contains all the cell types we would expect in the Nanostring data and regional differences should only result in a few differentially expressed genes. Here I load the Nanostring, Polioudakis data and a list of previously identified marker genes for each cell type:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, cache = FALSE}
+setwd('/home/jovyan/NanostringTrialAnalysis/')
+load('../data/fetalBrain/Polioudakis/raw_counts_mat.rdata')
+metadata_polioudakis = read.delim('../data/fetalBrain/Polioudakis/cell_metadata.csv', sep = ',')
+raw_counts_polioudakis = as.matrix(raw_counts_mat[,metadata_polioudakis$Cell])
+clusterMarkers = readRDS('../data/fetalBrain/Polioudakis/clusterMarkers.rds')
+
+metadata_nanostring = read.delim('../NanostringTrialAnalysis/SangerPilot_SegmentProperties.txt')
+raw_counts_nanostring = read.delim('../NanostringTrialAnalysis/SangerPilot_TargetCountMatrix.txt', row.names = 1)
+norm_counts_nanostring = raw_counts_nanostring
+norm_counts_nanostring = t(apply(raw_counts_nanostring, 1, function(x) x/metadata_nanostring[,'NormFactorQ3']))
+metadata_nanostring = cbind(metadata_nanostring, c('Hob7', 'Hob8', 'Hob8', 'Hob5'), c('19pcw', '19pcw', '19pcw', '14pcw'), c('GZ', 'GZ', 'CP', 'GZ'), c(689, 778, 768, 711)) 
+colnames(metadata_nanostring)[15:18] = c('SampleName', 'PostConceptionWeek', 'AnatomicalLocation', 'NumberOfNuclei')
+```
+
+Let's look at genes with the highest relative expression difference between the one cortical plate sample and the 3 from the germinal zone, using the normalized data and only genes above the Limit of Detection in at least 1 dataset:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, cache = FALSE}
+detectedGenes = c()
+for (i in 1:4){
+  detectedGenes = unique(c(detectedGenes, rownames(raw_counts_nanostring)[raw_counts_nanostring[,i] > metadata_nanostring[i,'GeoLOD2.5_01']])) 
+}
+ExpressionDifference = (rowMeans(norm_counts_nanostring[detectedGenes,c(1,2,4)]) - norm_counts_nanostring[detectedGenes,3])/norm_counts_nanostring[detectedGenes,3]
+enrichedGenes = detectedGenes[order(ExpressionDifference)]
+```
+The most enriched genes should show neuronal markers
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, cache = FALSE}
+
+head(enrichedGenes, 50)
+```
+
+And the bottom radial glia markers/intermediate progenitors:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, cache = FALSE}
+tail(enrichedGenes, 50)
+```
+
+Now while neuronal markers such as NEUROD6 and SATB2 are indeed in the first gene list, the most prominent radial glia markers do not appear in the second list. So here I look at the relative ranking of VIM, HES1 and HOPX:
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, cache = FALSE}
+which(enrichedGenes == 'VIM')/length(enrichedGenes)
+which(enrichedGenes == 'HES1')/length(enrichedGenes)
+which(enrichedGenes == 'HOPX')/length(enrichedGenes)
+```
+
+While VIM and HES1 are indeed among the highest enriched genes in the GZ samples, surprisingly this is not the case for HOPX an outer radial glia marker. Below are two heat maps, first showing the expression of the top 100 enriched genes in the CP and GZ samples and then showing all marker genes of radial glia and neurons. In both cases, sample S3, shows divergent expression from the rest:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, cache = FALSE}
+
+Heatmap(t(norm_counts_nanostring[c(head(enrichedGenes,50), tail(enrichedGenes,50)),]))
+relevantGenes = clusterMarkers$gene[clusterMarkers$cluster %in% c('ExN', 'ExM', 'ExM', 'ExM-U', 'ExDp1', 'ExDp2')]
+relevantGenes = relevantGenes[relevantGenes %in% rownames(raw_counts_nanostring)]
+Heatmap(t(norm_counts_nanostring[relevantGenes,]))
+
+```
+
+
+Now let's look at the relationship between the raw counts for each gene in the Nanostring samples and the summed raw counts for each gene for each cell type in the Polioudakis 2019 dataset. Importantly, each plot was subset to include only the marker genes of the relevant cell type. Red dashed lines denote the limit of detection in the Nanostring data or the value where we would expect at least 0.01 average counts in the scRNAseq data (a subjective limit of detection in scRNAseq). I plot this both on the log scale:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, cache = FALSE}
+
+vRG_raw_counts = rowSums(raw_counts_polioudakis[,metadata_polioudakis[,'Cluster'] == 'vRG'])
+oRG_raw_counts = rowSums(raw_counts_polioudakis[,metadata_polioudakis[,'Cluster'] == 'oRG'])
+IP_raw_counts = rowSums(raw_counts_polioudakis[,metadata_polioudakis[,'Cluster'] == 'IP'])
+ExN_raw_counts = rowSums(raw_counts_polioudakis[,metadata_polioudakis[,'Cluster'] == 'ExN'])
+ExM_raw_counts = rowSums(raw_counts_polioudakis[,metadata_polioudakis[,'Cluster'] == 'ExM'])
+ExMU_raw_counts = rowSums(raw_counts_polioudakis[,metadata_polioudakis[,'Cluster'] == 'ExM-U'])
+ExDp1_raw_counts = rowSums(raw_counts_polioudakis[,metadata_polioudakis[,'Cluster'] == 'ExDp1'])
+ExDp2_raw_counts = rowSums(raw_counts_polioudakis[,metadata_polioudakis[,'Cluster'] == 'ExDp2'])
+
+commonGenes = intersect(rownames(raw_counts_nanostring), rownames(raw_counts_polioudakis))
+
+vz_dataframe = as.data.frame(cbind(vRG_raw_counts[commonGenes],oRG_raw_counts[commonGenes],IP_raw_counts[commonGenes],ExN_raw_counts[commonGenes],ExM_raw_counts[commonGenes],ExMU_raw_counts[commonGenes],ExDp1_raw_counts[commonGenes],ExDp2_raw_counts[commonGenes], raw_counts_nanostring[commonGenes,]))
+colnames(vz_dataframe)[1:8] = c('vRG', 'oRG', 'IP', 'ExN', 'ExM', 'ExM-U', 'ExDp1', 'ExDp2')
+
+secondColour = 'grey35'
+
+allCelltypes = c('vRG', 'oRG', 'IP', 'ExN', 'ExM', 'ExM-U', 'ExDp1', 'ExDp2')
+for (cellType in allCelltypes){
+numberOfCells = unname(table(metadata_polioudakis$Cluster)[cellType])
+temp_dataframe = vz_dataframe[clusterMarkers$gene[clusterMarkers$cluster == cellType],]
+sampleNames = c('S1', 'S2', 'S3', 'S4')
+par(mfrow=c(2,2))
+p = list()
+for (index in 1:4){
+dot_colours = rep('black', dim(temp_dataframe)[1])
+dot_colours[temp_dataframe[sampleNames[index]] < metadata_nanostring[index,'GeoLOD2.5_01']] = secondColour
+dot_colours[temp_dataframe[cellType] < numberOfCells/100] = secondColour
+p[[index]] <- local({
+index = index
+p1 <- ggplot(temp_dataframe, aes(x=get(cellType), y=get(sampleNames[index]))) + 
+geom_point(col = dot_colours) + 
+scale_x_continuous(trans = 'log2') +
+scale_y_continuous(trans = 'log2') +
+geom_hline(yintercept=metadata_nanostring[index,'GeoLOD2.5_01'], linetype="dashed", 
+                color = "red", size=1) +
+geom_vline(xintercept=numberOfCells/100, linetype="dashed", 
+                color = "red", size=1) +
+geom_text(hjust = 2000, vjust = metadata_nanostring[index,'GeoLOD2.5_01'], label = 'LoD') +
+xlab(paste(cellType, ' (n =', as.character(numberOfCells), ')', sep = '')) + 
+ylab(paste(sampleNames[index], ' (n = ', as.character(metadata_nanostring[index, 'NumberOfNuclei']), ')', sep = ''))
+})
+}
+figure <- ggarrange(p[[1]], p[[2]], p[[3]], p[[4]],
+                    labels = c("A", "B", "C", "D"),
+                    ncol = 2, nrow = 2)
+print(figure)
+}
+```
+
+As expected gene counts are correlated for IP, vRG and oRG in the S1, S2 and S3 sample from the GZ. For sample S3 from the cortical plate, we see higher correlation for the neuronal cell types. Interestingly, IP marker genes are particularly correlated across the GZ samples and scRNAseq suggesting that we captured a lot of IPs. Overall the Nanostring data seems to capture most of the marker genes of each cell type. Only a few lower expressed marker genes fall below the Limit of Detection. However, this Limit of Detection is a very conservative threshold, so we can consider alternatives to a hard threshold for future data analysis.
+
